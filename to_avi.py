@@ -17,14 +17,17 @@ def default_avi_filename(nd2_filename):
     return root + ".avi"
 
 def main():
-    parser = argparse.ArgumentParser(description="Convert an ND2 time sequence to an AVI video.")
+    parser = argparse.ArgumentParser(description="Convert an ND2 time sequence to an AVI video with optional crop.")
     parser.add_argument("nd2_file", type=str, help="Input ND2 file")
-    parser.add_argument(
-        "--output", type=str, default=None,
-        help="Output AVI file (default: same as ND2 but with .avi extension)")
+    parser.add_argument("--output", type=str, default=None, help="Output AVI file (default: same as ND2 but with .avi extension)")
     parser.add_argument("--framerate", type=int, default=10, help="AVI framerate (default: 10)")
     parser.add_argument("--channel", type=int, default=0, help="Channel to use if multi-channel (default: 0)")
     parser.add_argument("--colormap", type=str, default=None, help="Apply OpenCV colormap (e.g. 'JET', optional)")
+
+    # Crop: x, y, width, height
+    parser.add_argument("--crop", type=int, nargs=4, metavar=('X', 'Y', 'WIDTH', 'HEIGHT'),
+                        help="Rectangular crop region as X Y WIDTH HEIGHT (pixels)")
+
     args = parser.parse_args()
 
     output_avi = args.output if args.output else default_avi_filename(args.nd2_file)
@@ -46,7 +49,6 @@ def main():
     # Channel handling
     if 'C' in axes:
         c_axis = axes.index('C')
-        # Move axes so we can slice channel
         arr = np.moveaxis(arr, [t_axis, c_axis, y_axis, x_axis], [0, 1, 2, 3])
         arr = arr[:, args.channel]  # pick specified channel
     else:
@@ -54,9 +56,21 @@ def main():
 
     nframes, height, width = arr.shape
 
+    # Crop parameters
+    if args.crop is not None:
+        cx, cy, cw, ch = args.crop
+        # Validate crop rectangle
+        if not (0 <= cx < width and 0 <= cy < height and 0 < cw <= width - cx and 0 < ch <= height - cy):
+            raise ValueError("Crop rectangle out of bounds (check x, y, width, height versus frame size).")
+        out_width, out_height = cw, ch
+    else:
+        cx, cy = 0, 0
+        out_width, out_height = width, height
+
     # Set up OpenCV video writer
     fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-    out = cv2.VideoWriter(output_avi, fourcc, args.framerate, (width, height), isColor=False if args.colormap is None else True)
+    is_color = args.colormap is not None
+    out = cv2.VideoWriter(output_avi, fourcc, args.framerate, (out_width, out_height), isColor=is_color)
 
     # Colormap option
     colormap_idx = None
@@ -69,11 +83,11 @@ def main():
     print(f"Writing {nframes} frames to '{output_avi}' at {args.framerate} fps")
     for i in range(nframes):
         frame = rescale_to_uint8(arr[i])
+        # Apply crop BEFORE colormap
+        frame = frame[cy:cy+out_height, cx:cx+out_width]
         if colormap_idx is not None:
             frame = cv2.applyColorMap(frame, colormap_idx)
-            out.write(frame)
-        else:
-            out.write(frame)
+        out.write(frame)
     out.release()
     print("Done!")
 
