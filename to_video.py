@@ -1,6 +1,7 @@
 import nd2
 import numpy as np
 import cv2
+import imageio
 import argparse
 import os
 
@@ -20,14 +21,18 @@ def default_mp4_filename(nd2_filename):
     root, ext = os.path.splitext(nd2_filename)
     return root + ".mp4"
 
+def default_gif_filename(nd2_filename):
+    root, ext = os.path.splitext(nd2_filename)
+    return root + ".gif"
+
 def main():
-    parser = argparse.ArgumentParser(description="Convert an ND2 time sequence to a video (AVI or MP4) with optional crop.")
+    parser = argparse.ArgumentParser(description="Convert an ND2 time sequence to a video (AVI, MP4, or GIF) with optional crop.")
     parser.add_argument("nd2_file", type=str, help="Input ND2 file")
     parser.add_argument("--output", type=str, default=None, help="Output video file (default: same as ND2 but with extension based on codec)")
     parser.add_argument("--framerate", type=int, default=10, help="Video framerate (default: 10)")
     parser.add_argument("--channel", type=int, default=0, help="Channel to use if multi-channel (default: 0)")
     parser.add_argument("--colormap", type=str, default=None, help="Apply OpenCV colormap (e.g. 'JET', optional)")
-    parser.add_argument("--codec", type=str, choices=["avi", "mp4"], default="avi", help="Video format/codec: 'avi' (MJPG, default) or 'mp4' (mp4v)")
+    parser.add_argument("--codec", type=str, choices=["avi", "mp4", "gif"], default="avi", help="Video format/codec: 'avi' (MJPG; default), 'mp4' (mp4v), or 'gif' (animated GIF)")
 
     # Crop: x, y, width, height
     parser.add_argument("--crop", type=int, nargs=4, metavar=('X', 'Y', 'WIDTH', 'HEIGHT'),
@@ -35,13 +40,16 @@ def main():
 
     args = parser.parse_args()
 
-    # Choose output file and codec based on selection
+    # Choose output file and writer based on codec
     if args.codec == "avi":
         output_file = args.output if args.output else default_avi_filename(args.nd2_file)
         fourcc = cv2.VideoWriter_fourcc(*'MJPG')
     elif args.codec == "mp4":
         output_file = args.output if args.output else default_mp4_filename(args.nd2_file)
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    elif args.codec == "gif":
+        output_file = args.output if args.output else default_gif_filename(args.nd2_file)
+        fourcc = None
     else:
         raise ValueError("Unsupported codec: {}".format(args.codec))
 
@@ -52,7 +60,6 @@ def main():
         axes = ''.join(sizes.keys())  # e.g., 'TCYX'
         arr = f.asarray()
 
-    # Handle data axes (rearrange to T, Y, X)
     if 'T' not in axes:
         raise ValueError("ND2 file does not contain a time sequence ('T' axis).")
     t_axis = axes.index('T')
@@ -80,11 +87,6 @@ def main():
         cx, cy = 0, 0
         out_width, out_height = width, height
 
-    # Set up OpenCV video writer
-    is_color = args.colormap is not None
-    out = cv2.VideoWriter(output_file, fourcc, args.framerate, (out_width, out_height), isColor=is_color)
-
-    # Colormap option
     colormap_idx = None
     if args.colormap is not None:
         if hasattr(cv2, f'COLORMAP_{args.colormap.upper()}'):
@@ -92,15 +94,33 @@ def main():
         else:
             raise ValueError(f"Unknown colormap '{args.colormap}' for OpenCV.")
 
-    print(f"Writing {nframes} frames to '{output_file}' at {args.framerate} fps")
-    for i in range(nframes):
-        frame = rescale_to_uint8(arr[i])
-        # Apply crop BEFORE colormap
-        frame = frame[cy:cy+out_height, cx:cx+out_width]
-        if colormap_idx is not None:
-            frame = cv2.applyColorMap(frame, colormap_idx)
-        out.write(frame)
-    out.release()
+    print(f"Writing {nframes} frames to '{output_file}' at {args.framerate} fps (codec: {args.codec})")
+
+    if args.codec in ["avi", "mp4"]:
+        is_color = args.colormap is not None
+        out = cv2.VideoWriter(output_file, fourcc, args.framerate, (out_width, out_height), isColor=is_color)
+        for i in range(nframes):
+            frame = rescale_to_uint8(arr[i])
+            # Crop BEFORE colormap
+            frame = frame[cy:cy+out_height, cx:cx+out_width]
+            if colormap_idx is not None:
+                frame = cv2.applyColorMap(frame, colormap_idx)
+            out.write(frame)
+        out.release()
+    elif args.codec == "gif":
+        frames = []
+        for i in range(nframes):
+            frame = rescale_to_uint8(arr[i])
+            frame = frame[cy:cy+out_height, cx:cx+out_width]
+            if colormap_idx is not None:
+                frame = cv2.applyColorMap(frame, colormap_idx)
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            else:
+                # For gray, convert to RGB so GIF doesn't look weird
+                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
+            frames.append(frame)
+        # duration in imageio is seconds per frame
+        imageio.mimsave(output_file, frames, duration=1.0/args.framerate)
     print("Done!")
 
 if __name__ == "__main__":
