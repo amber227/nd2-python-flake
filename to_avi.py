@@ -16,13 +16,18 @@ def default_avi_filename(nd2_filename):
     root, ext = os.path.splitext(nd2_filename)
     return root + ".avi"
 
+def default_mp4_filename(nd2_filename):
+    root, ext = os.path.splitext(nd2_filename)
+    return root + ".mp4"
+
 def main():
-    parser = argparse.ArgumentParser(description="Convert an ND2 time sequence to an AVI video with optional crop.")
+    parser = argparse.ArgumentParser(description="Convert an ND2 time sequence to a video (AVI or MP4) with optional crop.")
     parser.add_argument("nd2_file", type=str, help="Input ND2 file")
-    parser.add_argument("--output", type=str, default=None, help="Output AVI file (default: same as ND2 but with .avi extension)")
-    parser.add_argument("--framerate", type=int, default=10, help="AVI framerate (default: 10)")
+    parser.add_argument("--output", type=str, default=None, help="Output video file (default: same as ND2 but with extension based on codec)")
+    parser.add_argument("--framerate", type=int, default=10, help="Video framerate (default: 10)")
     parser.add_argument("--channel", type=int, default=0, help="Channel to use if multi-channel (default: 0)")
     parser.add_argument("--colormap", type=str, default=None, help="Apply OpenCV colormap (e.g. 'JET', optional)")
+    parser.add_argument("--codec", type=str, choices=["avi", "mp4"], default="avi", help="Video format/codec: 'avi' (MJPG, default) or 'mp4' (mp4v)")
 
     # Crop: x, y, width, height
     parser.add_argument("--crop", type=int, nargs=4, metavar=('X', 'Y', 'WIDTH', 'HEIGHT'),
@@ -30,7 +35,15 @@ def main():
 
     args = parser.parse_args()
 
-    output_avi = args.output if args.output else default_avi_filename(args.nd2_file)
+    # Choose output file and codec based on selection
+    if args.codec == "avi":
+        output_file = args.output if args.output else default_avi_filename(args.nd2_file)
+        fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+    elif args.codec == "mp4":
+        output_file = args.output if args.output else default_mp4_filename(args.nd2_file)
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    else:
+        raise ValueError("Unsupported codec: {}".format(args.codec))
 
     # Read ND2 file
     with nd2.ND2File(args.nd2_file) as f:
@@ -68,9 +81,8 @@ def main():
         out_width, out_height = width, height
 
     # Set up OpenCV video writer
-    fourcc = cv2.VideoWriter_fourcc(*'MJPG')
     is_color = args.colormap is not None
-    out = cv2.VideoWriter(output_avi, fourcc, args.framerate, (out_width, out_height), isColor=is_color)
+    out = cv2.VideoWriter(output_file, fourcc, args.framerate, (out_width, out_height), isColor=is_color)
 
     # Colormap option
     colormap_idx = None
@@ -80,7 +92,7 @@ def main():
         else:
             raise ValueError(f"Unknown colormap '{args.colormap}' for OpenCV.")
 
-    print(f"Writing {nframes} frames to '{output_avi}' at {args.framerate} fps")
+    print(f"Writing {nframes} frames to '{output_file}' at {args.framerate} fps")
     for i in range(nframes):
         frame = rescale_to_uint8(arr[i])
         # Apply crop BEFORE colormap
