@@ -105,7 +105,7 @@
       devShells.x86_64-linux = {
         # It is of course perfectly OK to keep using an impure virtualenv workflow and only use uv2nix to build packages.
         # This devShell simply adds Python and undoes the dependency leakage done by Nixpkgs Python infrastructure.
-        impure = pkgs.mkShell {
+        default = pkgs.mkShell { #impure
           packages = [
             python
             pkgs.uv
