@@ -8,19 +8,26 @@ def rescale_to_uint8(image):
     """Linearly scale any dtype to uint8."""
     imin, imax = np.min(image), np.max(image)
     if imin == imax:
-        # Flat image
         return np.zeros_like(image, dtype=np.uint8)
     scaled = (image - imin) * (255.0 / (imax - imin))
     return scaled.astype(np.uint8)
 
+def default_avi_filename(nd2_filename):
+    root, ext = os.path.splitext(nd2_filename)
+    return root + ".avi"
+
 def main():
     parser = argparse.ArgumentParser(description="Convert an ND2 time sequence to an AVI video.")
     parser.add_argument("nd2_file", type=str, help="Input ND2 file")
-    parser.add_argument("output_avi", type=str, help="Output AVI file")
+    parser.add_argument(
+        "--output", type=str, default=None,
+        help="Output AVI file (default: same as ND2 but with .avi extension)")
     parser.add_argument("--framerate", type=int, default=10, help="AVI framerate (default: 10)")
     parser.add_argument("--channel", type=int, default=0, help="Channel to use if multi-channel (default: 0)")
     parser.add_argument("--colormap", type=str, default=None, help="Apply OpenCV colormap (e.g. 'JET', optional)")
     args = parser.parse_args()
+
+    output_avi = args.output if args.output else default_avi_filename(args.nd2_file)
 
     # Read ND2 file
     with nd2.ND2File(args.nd2_file) as f:
@@ -49,7 +56,7 @@ def main():
 
     # Set up OpenCV video writer
     fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-    out = cv2.VideoWriter(args.output_avi, fourcc, args.framerate, (width, height), isColor=False if args.colormap is None else True)
+    out = cv2.VideoWriter(output_avi, fourcc, args.framerate, (width, height), isColor=False if args.colormap is None else True)
 
     # Colormap option
     colormap_idx = None
@@ -59,14 +66,13 @@ def main():
         else:
             raise ValueError(f"Unknown colormap '{args.colormap}' for OpenCV.")
 
-    print(f"Writing {nframes} frames to '{args.output_avi}' at {args.framerate} fps")
+    print(f"Writing {nframes} frames to '{output_avi}' at {args.framerate} fps")
     for i in range(nframes):
         frame = rescale_to_uint8(arr[i])
         if colormap_idx is not None:
             frame = cv2.applyColorMap(frame, colormap_idx)
             out.write(frame)
         else:
-            # OpenCV expects 3D array for color. For grayscale, provide single channel 2D.
             out.write(frame)
     out.release()
     print("Done!")
