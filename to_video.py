@@ -28,11 +28,11 @@ def default_gif_filename(nd2_filename):
 def main():
     parser = argparse.ArgumentParser(description="Convert an ND2 time sequence to a video (AVI, MP4, or GIF) with optional crop.")
     parser.add_argument("nd2_file", type=str, help="Input ND2 file")
-    parser.add_argument("--output", type=str, default=None, help="Output video file (default: same as ND2 but with extension based on codec)")
+    parser.add_argument("-o", "--output", type=str, default=None, help="Output video file (default: same as ND2 but with extension based on codec)")
     parser.add_argument("--framerate", type=int, default=10, help="Video framerate (default: 10)")
     parser.add_argument("--channel", type=int, default=0, help="Channel to use if multi-channel (default: 0)")
     parser.add_argument("--colormap", type=str, default=None, help="Apply OpenCV colormap (e.g. 'JET', optional)")
-    parser.add_argument("--codec", type=str, choices=["avi", "mp4", "gif"], default="avi", help="Video format/codec: 'avi' (MJPG; default), 'mp4' (mp4v), or 'gif' (animated GIF)")
+    parser.add_argument("-c", "--codec", type=str, choices=["avi", "mp4", "gif"], default="avi", help="Video format/codec: 'avi' (MJPG; default), 'mp4' (mp4v), or 'gif' (animated GIF)")
 
     # Crop: x, y, width, height
     parser.add_argument("--crop", type=int, nargs=4, metavar=('X', 'Y', 'WIDTH', 'HEIGHT'),
@@ -109,6 +109,7 @@ def main():
         out.release()
     elif args.codec == "gif":
         frames = []
+        last_frame_repeats = 5
         for i in range(nframes):
             frame = rescale_to_uint8(arr[i])
             frame = frame[cy:cy+out_height, cx:cx+out_width]
@@ -119,6 +120,10 @@ def main():
                 # For gray, convert to RGB so GIF doesn't look weird
                 frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
             frames.append(frame)
+
+        for _ in range(last_frame_repeats):
+            frames.append(frames[-1].copy())
+
         # duration in imageio is seconds per frame
         imageio.mimsave(output_file, frames, duration=1.0/args.framerate)
     print("Done!")
