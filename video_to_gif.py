@@ -9,26 +9,38 @@ from pathlib import Path
 import imageio
 import numpy as np
 from PIL import Image
+import cv2
 
 
 def load_video_frames(video_path, start_time=None, end_time=None):
     """Load video frames with optional time cropping."""
-    reader = imageio.get_reader(video_path)
-    fps = reader.get_meta_data()['fps']
+    # Use OpenCV for better MKV support
+    cap = cv2.VideoCapture(str(video_path))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
     # Calculate frame indices for time cropping
     start_frame = int(start_time * fps) if start_time is not None else 0
-    end_frame = int(end_time * fps) if end_time is not None else reader.count_frames()
+    end_frame = int(end_time * fps) if end_time is not None else total_frames
     
     frames = []
-    for i, frame in enumerate(reader):
-        if i < start_frame:
-            continue
-        if i >= end_frame:
-            break
-        frames.append(frame)
+    frame_idx = 0
     
-    reader.close()
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+            
+        if frame_idx >= start_frame and frame_idx < end_frame:
+            # Convert BGR to RGB
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frames.append(frame_rgb)
+        
+        frame_idx += 1
+        if frame_idx >= end_frame:
+            break
+    
+    cap.release()
     return frames, fps
 
 
@@ -49,8 +61,7 @@ def resize_frame(frame, scale_factor):
 
 
 def video_to_gif(input_path, output_path, start_time=None, end_time=None, 
-                 crop_x=None, crop_y=None, crop_width=None, crop_height=None,
-                 scale=1.0, fps=10, loop=0):
+                 crop=None, scale=1.0, fps=10, loop=0):
     """
     Convert video to GIF with optional cropping and scaling.
     
@@ -59,10 +70,7 @@ def video_to_gif(input_path, output_path, start_time=None, end_time=None,
         output_path: Path to output GIF file
         start_time: Start time in seconds (optional)
         end_time: End time in seconds (optional)
-        crop_x: X coordinate for cropping (optional)
-        crop_y: Y coordinate for cropping (optional)
-        crop_width: Width for cropping (optional)
-        crop_height: Height for cropping (optional)
+        crop: Tuple of (x, y, width, height) for cropping (optional)
         scale: Scale factor for resizing (default: 1.0)
         fps: Output GIF frame rate (default: 10)
         loop: Number of loops (0 = infinite, default: 0)
@@ -79,7 +87,8 @@ def video_to_gif(input_path, output_path, start_time=None, end_time=None,
     processed_frames = []
     for frame in frames:
         # Apply spatial cropping if specified
-        if all(param is not None for param in [crop_x, crop_y, crop_width, crop_height]):
+        if crop is not None:
+            crop_x, crop_y, crop_width, crop_height = crop
             frame = crop_frame(frame, crop_x, crop_y, crop_width, crop_height)
         
         # Apply scaling if specified
@@ -117,10 +126,8 @@ def main():
     parser.add_argument("--end", "-e", type=float, help="End time in seconds")
     
     # Spatial cropping options
-    parser.add_argument("--crop-x", type=int, help="X coordinate for cropping")
-    parser.add_argument("--crop-y", type=int, help="Y coordinate for cropping")
-    parser.add_argument("--crop-width", type=int, help="Width for cropping")
-    parser.add_argument("--crop-height", type=int, help="Height for cropping")
+    parser.add_argument("--crop", type=int, nargs=4, metavar=("X", "Y", "WIDTH", "HEIGHT"),
+                       help="Crop region as: x y width height")
     
     # Scaling and output options
     parser.add_argument("--scale", type=float, default=1.0, help="Scale factor (default: 1.0)")
@@ -135,8 +142,8 @@ def main():
         print(f"Error: Input file '{input_path}' does not exist")
         sys.exit(1)
     
-    if input_path.suffix.lower() not in ['.mkv', '.mp4']:
-        print(f"Error: Input file must be MKV or MP4, got '{input_path.suffix}'")
+    if input_path.suffix.lower() not in ['.mkv', '.mp4', '.avi', '.mov', '.wmv']:
+        print(f"Error: Input file must be a video file (MKV, MP4, AVI, MOV, WMV), got '{input_path.suffix}'")
         sys.exit(1)
     
     # Generate output filename if not provided
@@ -146,12 +153,8 @@ def main():
         output_path = input_path.with_suffix('.gif')
     
     # Validate cropping parameters
-    crop_params = [args.crop_x, args.crop_y, args.crop_width, args.crop_height]
-    if any(param is not None for param in crop_params):
-        if not all(param is not None for param in crop_params):
-            print("Error: All cropping parameters (--crop-x, --crop-y, --crop-width, --crop-height) must be specified together")
-            sys.exit(1)
-        if any(param < 0 for param in crop_params):
+    if args.crop is not None:
+        if any(param < 0 for param in args.crop):
             print("Error: Cropping parameters must be non-negative")
             sys.exit(1)
     
@@ -182,10 +185,7 @@ def main():
             output_path=output_path,
             start_time=args.start,
             end_time=args.end,
-            crop_x=args.crop_x,
-            crop_y=args.crop_y,
-            crop_width=args.crop_width,
-            crop_height=args.crop_height,
+            crop=args.crop,
             scale=args.scale,
             fps=args.fps,
             loop=args.loops
