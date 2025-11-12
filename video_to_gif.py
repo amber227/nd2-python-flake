@@ -56,7 +56,16 @@ def resize_frame(frame, scale_factor):
     
     pil_image = Image.fromarray(frame)
     new_size = (int(pil_image.width * scale_factor), int(pil_image.height * scale_factor))
-    resized = pil_image.resize(new_size, Image.Resampling.LANCZOS)
+    
+    # Use different resampling methods based on whether we're scaling up or down
+    if scale_factor < 1.0:
+        # For downscaling, use BICUBIC which produces cleaner results
+        resampling = Image.Resampling.BICUBIC
+    else:
+        # For upscaling, LANCZOS works well
+        resampling = Image.Resampling.LANCZOS
+    
+    resized = pil_image.resize(new_size, resampling)
     return np.array(resized)
 
 
