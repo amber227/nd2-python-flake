@@ -110,6 +110,7 @@
             python
             pkgs.gifsicle
             pkgs.uv
+            pkgs.qt6.full
           ];
           env =
             {
