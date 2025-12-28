@@ -25,14 +25,18 @@ def make_gif_loop(input_path, output_path, last_frame_repeats=1):
             # frames.extend(durations[-50:])
 
         for i in range(0, len(durations)):
-            durations[i] = int(durations[i] * 1.3)
+            durations[i] = int(durations[i] * 1.7)
 
         print(len(durations))
         print(durations)
         print(type(frames[0]))
 
-        frames = frames[12:-4]
-        durations = durations[12:-4]
+        # Cut off ends
+        frames = frames[::3]
+        durations = durations[::3]
+
+        # frames += frames[::-1]
+        # durations += durations[::-1]
 
         # Save new GIF with loop option
         frames[0].save(

@@ -7,3 +7,4 @@ tmp/
 *.nd2
 *.mp4
 *.gif
+.aider*

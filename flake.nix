@@ -108,6 +108,7 @@
         default = pkgs.mkShell { #impure
           packages = [
             python
+            pkgs.gifsicle
             pkgs.uv
           ];
           env =
