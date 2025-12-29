@@ -1,143 +1,243 @@
+#!/usr/bin/env python3
 """
-czi_to_numpy.py
+czi_viewer_cv2.py
 
-Example usage:
-    python czi_to_numpy.py /path/to/image.czi
+Usage:
+    uv run python czi_viewer_cv2.py /path/to/some_file.czi
+
+Controls:
+    Up / Down arrows or k / j    : cycle channels
+    Left / Right arrows or h / l : cycle CZI files in same directory
+    y                            : copy current file path to clipboard
+    q or Esc                     : quit
 """
 
 import sys
 from pathlib import Path
+from typing import List, Optional
 
 import numpy as np
+import cv2
 from aicsimageio import AICSImage
 
-
-def load_czi(path: str) -> AICSImage:
-    """Load a CZI file with AICSImage."""
-    img = AICSImage(path)
-    return img
-
-
-def inspect_image(img: AICSImage):
-    """
-    Print dimension metadata and channel info.
-
-    AICSImage standard order is usually "TCZYX":
-      T: time
-      C: channel
-      Z: z-slice
-      Y: height
-      X: width
-    """
-    print("=== Basic Info ===")
-    print(f"Data type      : {img.dtype}")
-    print(f"Dimensions     : {img.dims}")       # e.g. Dimensions(T=1, C=3, Z=5, Y=1024, X=1024)
-    print(f"Dimension order: {img.dims.order}") # e.g. 'TCZYX'
-    print(f"Shape (TCZYX)  : {img.shape}")     # e.g. (1, 3, 5, 1024, 1024) in the given order
-
-    # Channel names (if present in metadata)
-    try:
-        channel_names = img.get_channel_names()
-    except Exception:
-        channel_names = None
-
-    print("\n=== Channels ===")
-    if channel_names:
-        for i, name in enumerate(channel_names):
-            print(f"  C={i}: {name}")
-    else:
-        print("  No channel names found; refer to channels by index (0..C-1).")
+try:
+    import pyperclip
+except ImportError:
+    pyperclip = None
 
 
-def get_all_channels_numpy(img: AICSImage) -> np.ndarray:
-    """
-    Return the full image as a NumPy array in TCZYX order.
+class CziBrowser:
+    def __init__(self, start_path: Path):
+        self.files: List[Path] = self._find_czi_files(start_path)
+        if not self.files:
+            raise RuntimeError(f"No .czi files found in directory: {start_path.parent}")
 
-    You can reorder or squeeze dimensions as needed after this.
-    """
-    data = img.get_image_data("TCZYX")  # ensures a known dimension order
-    return data  # shape: (T, C, Z, Y, X)
+        self.file_index: int = self.files.index(start_path.resolve())
+        self.img: Optional[AICSImage] = None
+
+        # Channel index is remembered across files
+        self.channel_index: int = 0
+        self.channel_names: Optional[List[str]] = None
+
+        self.window_name = "CZI Channel Viewer (cv2)"
+
+        self._load_current_file()
+
+    # ---------- file handling ----------
+
+    def _find_czi_files(self, path: Path) -> List[Path]:
+        directory = path.parent
+        return sorted(p.resolve() for p in directory.iterdir() if p.suffix.lower() == ".czi")
+
+    def _load_current_file(self):
+        """Load current CZI into AICSImage, keep channel_index if possible."""
+        current_path = self.files[self.file_index]
+        print(f"Loading file: {current_path}")
+        self.img = AICSImage(str(current_path))
+
+        try:
+            self.channel_names = self.img.get_channel_names()
+        except Exception:
+            self.channel_names = None
+
+        n_channels = self._get_num_channels()
+        if n_channels == 0:
+            self.channel_index = 0
+        else:
+            self.channel_index = max(0, min(self.channel_index, n_channels - 1))
+
+    def _get_num_channels(self) -> int:
+        data = self.img.get_image_data("TCZYX")
+        return data.shape[1]
+
+    # ---------- data extraction ----------
+
+    def _get_channel_2d(self) -> np.ndarray:
+        """
+        Return a 2D float array (Y, X) for the current channel:
+        - T=0
+        - Z-max projection
+        """
+        data = self.img.get_image_data("TCZYX")  # (T, C, Z, Y, X)
+        t_dim, c_dim, z_dim, y_dim, x_dim = data.shape
+
+        t = 0
+        c = max(0, min(self.channel_index, c_dim - 1))
+
+        channel_3d = data[t, c]  # (Z, Y, X)
+        if z_dim > 1:
+            channel_2d = channel_3d.max(axis=0)  # (Y, X)
+        else:
+            channel_2d = channel_3d[0]
+
+        return channel_2d.astype(np.float64, copy=False)
+
+    def _to_display_uint8(self, img: np.ndarray) -> np.ndarray:
+        """Normalize image to 0–255 uint8 for display with OpenCV."""
+        if img.size == 0:
+            return np.zeros((1, 1), dtype=np.uint8)
+
+        min_val = np.nanmin(img)
+        max_val = np.nanmax(img)
+
+        if max_val <= min_val:
+            return np.zeros_like(img, dtype=np.uint8)
+
+        norm = (img - min_val) / (max_val - min_val)
+        return (norm * 255.0).clip(0, 255).astype(np.uint8)
+
+    # ---------- overlay ----------
+
+    def _overlay_info(self, disp: np.ndarray) -> np.ndarray:
+        """
+        Draw filename and channel info onto the display image.
+        """
+        # Convert grayscale to BGR for colored text
+        if len(disp.shape) == 2:
+            img_bgr = cv2.cvtColor(disp, cv2.COLOR_GRAY2BGR)
+        else:
+            img_bgr = disp.copy()
+
+        current_path = self.files[self.file_index]
+        n_channels = self._get_num_channels()
+
+        if self.channel_names and self.channel_index < len(self.channel_names):
+            ch_label = f"{self.channel_index} ({self.channel_names[self.channel_index]})"
+        else:
+            ch_label = f"{self.channel_index}"
+
+        text1 = current_path.name
+        text2 = f"Channel {ch_label} / {n_channels - 1}"
+
+        # Drawing parameters
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = 0.6
+        thickness = 1
+        color_fg = (255, 255, 255)  # white
+        color_bg = (0, 0, 0)        # black
+
+        # Positions
+        y0 = 20
+        y1 = 40
+        x = 10
+
+        # Helper to draw text with a black outline for readability
+        def draw_outlined(text, y):
+            cv2.putText(img_bgr, text, (x, y), font, scale, color_bg, thickness + 2, cv2.LINE_AA)
+            cv2.putText(img_bgr, text, (x, y), font, scale, color_fg, thickness, cv2.LINE_AA)
+
+        draw_outlined(text1, y0)
+        draw_outlined(text2, y1)
+
+        return img_bgr
+
+    # ---------- clipboard ----------
+
+    def _copy_current_path_to_clipboard(self):
+        current_path = str(self.files[self.file_index])
+        if pyperclip is None:
+            print(f"[WARN] pyperclip not installed; cannot copy to clipboard. Path: {current_path}")
+            return
+        try:
+            pyperclip.copy(current_path)
+            print(f"[INFO] Copied to clipboard: {current_path}")
+        except Exception as e:
+            print(f"[WARN] Failed to copy to clipboard: {e}. Path: {current_path}")
+
+    # ---------- UI loop ----------
+
+    def show(self):
+        cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
+
+        while True:
+            channel_2d = self._get_channel_2d()
+            disp = self._to_display_uint8(channel_2d)
+            disp = self._overlay_info(disp)
+
+            current_path = self.files[self.file_index]
+            cv2.setWindowTitle(self.window_name, current_path.name)
+
+            cv2.imshow(self.window_name, disp)
+            key = cv2.waitKey(0) & 0xFFFF
+
+            # q or Esc -> quit
+            if key in (ord('q'), 27):
+                break
+
+            # 'y' -> copy filename to clipboard
+            elif key == ord('y'):
+                self._copy_current_path_to_clipboard()
+
+            # File navigation: left/right arrows or h/l
+            elif key in (81, ord('h')):  # Left
+                self._prev_file()
+            elif key in (83, ord('l')):  # Right
+                self._next_file()
+
+            # Channel navigation: up/down arrows or k/j
+            elif key in (82, ord('k')):  # Up
+                self._next_channel()
+            elif key in (84, ord('j')):  # Down
+                self._prev_channel()
+
+        cv2.destroyAllWindows()
+
+    def _next_channel(self):
+        n_channels = self._get_num_channels()
+        if n_channels == 0:
+            return
+        self.channel_index = (self.channel_index + 1) % n_channels
+        print(f"Channel -> {self.channel_index}")
+
+    def _prev_channel(self):
+        n_channels = self._get_num_channels()
+        if n_channels == 0:
+            return
+        self.channel_index = (self.channel_index - 1) % n_channels
+        print(f"Channel -> {self.channel_index}")
+
+    def _next_file(self):
+        self.file_index = (self.file_index + 1) % len(self.files)
+        self._load_current_file()
+
+    def _prev_file(self):
+        self.file_index = (self.file_index - 1) % len(self.files)
+        self._load_current_file()
 
 
-def get_single_channel_numpy(
-    img: AICSImage,
-    channel_index: int,
-    time_index: int = 0,
-    z_index: int | None = None,
-) -> np.ndarray:
-    """
-    Extract a particular channel (and optionally a single time and/or z) as a NumPy array.
-
-    Parameters
-    ----------
-    channel_index : int
-        Channel index (0-based).
-    time_index : int
-        Timepoint index (0-based). Default: 0.
-    z_index : int | None
-        If None, return all z-slices for that channel.
-        If int, return a single z-slice.
-
-    Returns
-    -------
-    np.ndarray
-        If z_index is None: shape (Z, Y, X)
-        If z_index is int:  shape (Y, X)
-    """
-    # Get full data as TCZYX
-    data = img.get_image_data("TCZYX")  # (T, C, Z, Y, X)
-    t_dim, c_dim, z_dim, y_dim, x_dim = data.shape
-
-    if not (0 <= channel_index < c_dim):
-        raise ValueError(f"channel_index {channel_index} out of range [0, {c_dim - 1}]")
-    if not (0 <= time_index < t_dim):
-        raise ValueError(f"time_index {time_index} out of range [0, {t_dim - 1}]")
-
-    if z_index is None:
-        # All Z for one T, one C  -> (Z, Y, X)
-        channel_data = data[time_index, channel_index, :, :, :]
-    else:
-        if not (0 <= z_index < z_dim):
-            raise ValueError(f"z_index {z_index} out of range [0, {z_dim - 1}]")
-        # Single Z -> (Y, X)
-        channel_data = data[time_index, channel_index, z_index, :, :]
-
-    return channel_data
-
-
-def main(path_str: str):
-    path = Path(path_str)
-    if not path.is_file():
-        print(f"File not found: {path}")
+def main():
+    if len(sys.argv) != 2:
+        print("Usage: python czi_viewer_cv2.py /path/to/some_file.czi")
         sys.exit(1)
 
-    print(f"Loading CZI file: {path}")
-    img = load_czi(str(path))
+    start_path = Path(sys.argv[1]).resolve()
+    if not start_path.is_file():
+        print(f"File not found: {start_path}")
+        sys.exit(1)
 
-    # Inspect
-    inspect_image(img)
-
-    # Example: get all data as NumPy
-    all_data = get_all_channels_numpy(img)
-    print("\n=== All data ===")
-    print(f"all_data.shape (TCZYX): {all_data.shape}")
-    print(f"all_data.dtype        : {all_data.dtype}")
-
-    # Example: select a specific channel
-    # Here we just pick channel 0; in practice you would choose based on inspect_image()
-    channel_idx = 0
-    ch0 = get_single_channel_numpy(img, channel_index=channel_idx, time_index=0, z_index=None)
-    print("\n=== Single channel example ===")
-    print(f"Selected channel index: {channel_idx}")
-    print(f"ch0.shape             : {ch0.shape}")  # (Z, Y, X)
-    print(f"ch0.dtype             : {ch0.dtype}")
-
-    # If you want to save these arrays (e.g., as .npy), you can do:
-    # np.save(path.with_suffix(f'.channel{channel_idx}.npy'), ch0)
+    browser = CziBrowser(start_path)
+    browser.show()
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage: python czi_to_numpy.py /path/to/image.czi")
-        sys.exit(1)
-    main(sys.argv[1])
+    main()

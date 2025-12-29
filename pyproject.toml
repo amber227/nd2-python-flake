@@ -15,5 +15,7 @@ dependencies = [
     "opencv-python>=4.12.0.88",
     "pillow>=11.3.0",
     "pygifsicle",
+    "pyperclip>=1.11.0",
+    "pyqt6>=6.10.1",
     "scikit-image>=0.25.2",
 ]

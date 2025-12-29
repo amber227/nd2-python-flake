@@ -111,6 +111,7 @@
             pkgs.gifsicle
             pkgs.uv
             pkgs.qt6.full
+            pkgs.python312Packages.pyqt6   # Python Qt binding from Nix
           ];
           env =
             {
